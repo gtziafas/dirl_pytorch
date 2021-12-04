@@ -1,6 +1,7 @@
 from typing import *
 import torch
 import torch.nn as nn 
+from torch import Tensor
 import torch.nn.functional as F 
 
 
@@ -16,23 +17,19 @@ class ClassificationLoss(nn.Module):
 
 class DomainLoss(nn.Module):
     # discriminate input images as source / target
-    def __init__(self, batch_size: int):
+    def __init__(self):
         super().__init__()
-        assert batch_size % 2 == 0, 'batch size must be divided by 2'
-        self.batch_size = batch_size
-
-        # 0 = source, 1 = target - always remain like this because of batch sampling
-        self.domain_labels = torch.vstack([torch.tile(torch.tensor([1, 0]), [batch_size // 2, 1]), 
-                    torch.tile(torch.tensor([0, 1]), [batch_size // 2, 1])])
-        self.adv_domain_labels = torch.tile(torch.tensor([1, 0]), [batch_size, 1])
     
-    def forward(self, logits: Tensor) -> Tuple[Tensor, Tensor]:
+    def forward(self, logits: Tensor, domain: Tensor, target_start_id: Optional[int] = None) -> Tuple[Tensor, Tensor]:
+        # if not given, assumes 50% source - 50% target in batch
+        target_start_id = logits.shape[0] // 2 if target_start_id is None else target_start_id
+
         # discriminate domain of input 
-        domain_loss = F.binary_cross_entropy_with_logits(logits, self.domain_labels)
+        domain_loss = F.binary_cross_entropy_with_logits(logits, domain)
 
         # adversarial loss for the target data
-        logits_target = logits[self.batch_size // 2 :]
-        adv_domain_labels_target = self.adv_domain_labels[self.batch_size // 2 :]
+        logits_target = logits[target_start_id:]
+        adv_domain_labels_target = (1 - domain)[target_start_id:]
         adv_domain_loss = F.binary_cross_entropy_with_logits(logits_target, adv_domain_labels_target)
 
         return domain_loss, adv_domain_loss
@@ -103,45 +100,37 @@ class SoftTripletLoss(nn.Module):
 
 
 class ConditionalDomainLoss(nn.Module):
-    def __init__(self, num_classes: int, sizing: List[int]):
+    def __init__(self, num_classes: int):
         super().__init__()
         self.num_classes = num_classes
-        self.sizing = sizing 
-        self.batch_size = sum(sizing)
 
-        # 0 = source, 1 = target - always remain like this because of batch sampling
-        self.domain_labels = torch.vstack([torch.tile(torch.tensor([1, 0]), [self.batch_size // 2, 1]), 
-                    torch.tile(torch.tensor([0, 1]), [self.batch_size // 2, 1])])
-        self.adv_domain_labels = torch.tile(torch.tensor([1, 0]), [self.batch_size, 1])
-
-    def forward(self, logits_list: List[Tensor], labels: Tensor) -> Tuple[Tensor, Tensor]:
-        labels_source = labels[:self.sizing[0]]
-        domain_source = self.domain_labels[:self.sizing[0]]
-        adv_domain_source = self.adv_domain_labels[:self.sizing[0]]
-        labels_target_sup = labels[self.sizing[0] : sum(self.sizing[0:2])]
-        domain_target_sup = self.domain_labels[self.sizing[0] : sum(self.sizing[0:2])]
-        adv_domain_target_sup = self.adv_domain_labels[self.sizing[0] : sum(self.sizing[0:2])]
+    def forward(self, logits_list: List[Tensor], labels: Tensor, domain: Tensor, target_start_id: Optional[int] = None) -> Tuple[Tensor, Tensor]:
+        labels_source = labels[:target_start_id]
+        domain_source = domain[:target_start_id]
+        # adv_domain_source = (1 - domain)[:target_start_id]
+        labels_target = labels[target_start_id :]
+        domain_target = domain[target_start_id :]
+        adv_domain_target = (1 - domain)[target_start_id :]
 
         lossA, lossB  = 0., 0.
         for label in range(self.num_classes):
             is_class_source = labels_source.argmax(1) == label 
             masked_domain_source = domain_source[is_class_source]
-            masked_class_dann_source = logits_list[label][:self.sizing[0]][is_class_source]
-            masked_adv_domain_source = adv_domain_source[is_class_source]
+            masked_class_dann_source = logits_list[label][:target_start_id][is_class_source]
+            # masked_adv_domain_source = adv_domain_source[is_class_source]
 
-            is_class_target_1 = labels_target_sup.argmax(1) == label 
-            masked_domain_target_1 = domain_target_sup[is_class_target_1]
-            masked_class_dann_target_1 = logits_list[label][self.sizing[0] : sum(self.sizing[0:2])][is_class_target_1]
-            masked_adv_domain_target_1 = adv_domain_target_sup[is_class_target_1]
+            is_class_target_1 = labels_target.argmax(1) == label 
+            masked_domain_target_1 = domain_target[is_class_target_1]
+            masked_class_dann_target_1 = logits_list[label][target_start_id :][is_class_target_1]
+            masked_adv_domain_target_1 = adv_domain_target[is_class_target_1]
 
-            m_shape_ratio = torch.tensor(max(masked_domain_source.shape[0] // masked_domain_target_1.shape[0], 1))
+            m_shape_ratio = torch.tensor(max(masked_domain_source.shape[0] // (masked_domain_target_1.shape[0]+1e-06), 1))
             masked_domain = torch.cat((masked_domain_source, masked_domain_target_1), dim=0)
             masked_class_dann = torch.cat((masked_class_dann_source, masked_class_dann_target_1), dim=0)
-            masked_adv_domain = torch.cat((masked_adv_domain_source, masked_adv_domain_target_1), dim=0)
+            # masked_adv_domain = torch.cat((masked_adv_domain_source, masked_adv_domain_target_1), dim=0)
 
-            lossA += F.binary_cross_entropy_with_logits(masked_class_dann.float(), masked_domain.float())
-            lossB += F.binary_cross_entropy_with_logits(masked_class_dann_target_1.float(), masked_adv_domain_target_1.float())        
+            lossA += F.binary_cross_entropy_with_logits(masked_class_dann, masked_domain)
+            lossB += F.binary_cross_entropy_with_logits(masked_class_dann_target_1, masked_adv_domain_target_1)        
         lossA /= self.num_classes
         lossB /= self.num_classes
-
         return lossA, lossB
