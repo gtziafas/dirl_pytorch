@@ -7,7 +7,11 @@ from grad_reverse import GradReverse
 
 
 class DigitsDIRLEncoder(nn.Module):
+<<<<<<< HEAD
+    def __init__(self, emb_dim: int):
+=======
     def __init__(self, num_features: int, emb_dim: int):
+>>>>>>> 4478d89f4fe8f76ca36dad4d793dd8f4162dd2c9
         super().__init__()
         self.conv1 = nn.Sequential(nn.Conv2d(in_channels=3, out_channels=32, kernel_size=3, padding=1), 
                             nn.LeakyReLU(), 
@@ -34,7 +38,7 @@ class DigitsDIRLEncoder(nn.Module):
                             ) 
 
         # bottleneck
-        self.emb = nn.Linear(num_features, emb_dim)
+        self.emb = nn.Linear(1152, emb_dim)
 
     def forward(self, x: Tensor) -> Tensor:
         x = self.conv1(x)
@@ -50,30 +54,40 @@ class DigitsDIRLEncoder(nn.Module):
 class DigitsDIRL(nn.Module):
     def __init__(self, 
                 num_classes: int=10, 
-                emb_dim: int=128 
+                emb_dim: int=128,
+                input_normalize: bool = True 
                 ):
         super().__init__()
+<<<<<<< HEAD
+        self.input_normalize = input_normalize
+=======
+>>>>>>> 4478d89f4fe8f76ca36dad4d793dd8f4162dd2c9
         self.num_classes = num_classes
 
         # freeze gradients to remove unwanted contributions during adversarial step
         self.freeze_gradient = GradReverse(0)
+        #self.reverse_gradient = GradReverse()
 
         # CNN encoder
+<<<<<<< HEAD
+        self.encoder = DigitsDIRLEncoder(emb_dim)
+=======
         self.encoder = DigitsDIRLEncoder(1152, 256)
+>>>>>>> 4478d89f4fe8f76ca36dad4d793dd8f4162dd2c9
 
         # classifier
         self.cls = nn.Sequential(nn.Linear(emb_dim, 100),
                             nn.LeakyReLU(),
                             nn.Linear(100, 50),
                             nn.LeakyReLU(),
-                            nn.Linear(50, num_classes))
+                            nn.Linear(50, num_classes)).apply(self.init_weights)
 
         # domain discriminator
         self.dd = nn.Sequential(nn.Linear(emb_dim, 100),
                             nn.LeakyReLU(),
                             nn.Linear(100, 50),
                             nn.LeakyReLU(),
-                            nn.Linear(50, 2))
+                            nn.Linear(50, 2)).apply(self.init_weights)
 
         # conditional domain discriminator
         # self.cdd = nn.ModuleList([nn.Sequential(nn.Linear(128, 100),
@@ -83,14 +97,24 @@ class DigitsDIRL(nn.Module):
         #                     nn.Linear(50, 2)) for _ in range(num_classes)])
 
         # parallel version
-        self.cdd_1 = nn.Linear(emb_dim, 100 * num_classes)
-        self.cdd_2 = nn.Conv1d(100 * num_classes, 50 * num_classes, kernel_size=1, groups=num_classes)
-        self.cdd_3 = nn.Conv1d(50 * num_classes, 2 * num_classes, kernel_size=1, groups=num_classes)
+        self.cdd_1 = nn.Linear(emb_dim, 100 * num_classes).apply(self.init_weights)
+        self.cdd_2 = nn.Conv1d(100 * num_classes, 50 * num_classes, kernel_size=1, groups=num_classes).apply(self.init_weights)
+        self.cdd_3 = nn.Conv1d(50 * num_classes, 2 * num_classes, kernel_size=1, groups=num_classes).apply(self.init_weights)
+
+    def init_weights(self, m: nn.Module):
+        if isinstance(m, nn.Linear) or isinstance(m, nn.Conv1d):
+            torch.nn.init.xavier_uniform_(m.weight)
+            m.bias.data.fill_(0.01)
 
     def encode(self, x: Tensor) -> Tensor:
         return self.encoder(x)
 
     def forward(self, x: Tensor, freeze_gradient: bool = False) -> Tuple[Tensor, Tensor, Tensor, List[Tensor]]:
+        if self.input_normalize:
+            mean = x.mean(dim=[2,3], keepdim=True)
+            std = torch.square(x - mean).mean(dim=[2,3], keepdim=True)
+            x = (x - mean) / (std + 1e-5)
+
         embs = self.encode(x)
 
         # class label predictions

@@ -63,9 +63,9 @@ class SoftTripletLoss(nn.Module):
         return norm(x.unsqueeze(2) - y.T).T
 
     def kl_dist(self, x: Tensor, y: Tensor) -> Tensor:
-        X = torch.distributions.Categorical(probs=x)
-        Y = torch.distributions.Categorical(probs=y)
-        return torch.distributions.kl_divergence(X, Y)
+        x = torch.distributions.Categorical(probs=x)
+        y = torch.distributions.Categorical(probs=y)
+        return torch.distributions.kl_divergence(x, y)
 
     def forward(self, embs: Tensor, labels: Tensor) -> Tensor:
         labels = labels.argmax(-1)
@@ -73,26 +73,22 @@ class SoftTripletLoss(nn.Module):
             embs = F.normalize(embs, p=2, dim=1)
 
         pdist_matrix = self.compute_pairwise_distances(embs, embs)
-        beta = 1. / (2. * torch.tensor(self.sigmas).unsqueeze(1))
-        pdist_matrix_pos = (-beta @ pdist_matrix.reshape(1, -1)).exp().sum(0).reshape(pdist_matrix.shape)
+        beta = 1. / (2. * torch.tensor(self.sigmas, device=embs.device).unsqueeze(1))
+        pdist_matrix = torch.matmul(-beta, pdist_matrix.reshape(1, -1))
+        pdist_matrix = pdist_matrix.exp().sum(0).reshape(embs.shape[0], embs.shape[0])
 
-        labels_equal = labels.unsqueeze(0) == labels.unsqueeze(1)
-        mask_negatives = torch.logical_not(labels_equal).float()
+        mask_anchors = labels.unsqueeze(0) == labels.unsqueeze(1).float()
+        mask_negatives = torch.logical_not(mask_anchors).float()
 
-        indices_equal = torch.eye(labels.shape[0]).bool()
-        indices_not_equal = torch.logical_not(indices_equal)
-        mask_positives = torch.logical_and(indices_not_equal, labels_equal).float()
+        pdist_matrix = pdist_matrix / torch.norm(pdist_matrix, p=1, dim=1, keepdim=True)
+        rep_anchors_rows = torch.tile(pdist_matrix, [1, pdist_matrix.shape[0]])
+        rep_anchors_rows = rep_anchors_rows.reshape(pdist_matrix.shape[0] * pdist_matrix.shape[1], pdist_matrix.shape[0])
+        pdist_matrix = torch.tile(pdist_matrix, [pdist_matrix.shape[0], 1])
 
-        mask_anchors = labels_equal.float()
-        anchors_dist = pdist_matrix_pos / torch.norm(pdist_matrix_pos, p=1, dim=1, keepdim=True)
-        rep_anchors_rows = torch.tile(anchors_dist, [1, anchors_dist.shape[0]])
-        rep_anchors_rows = rep_anchors_rows.reshape(anchors_dist.shape[0] * anchors_dist.shape[1], anchors_dist.shape[0])
-        rep_anchors_matrices = torch.tile(anchors_dist, [anchors_dist.shape[0], 1])
-
-        kl_loss_pw = self.kl_dist(rep_anchors_rows + 1e-6, rep_anchors_matrices + 1e-6)
-        kl_loss_pw = kl_loss_pw.reshape(anchors_dist.shape[0], anchors_dist.shape[0])
-        kl_div_pw_pos = torch.multiply(mask_anchors, kl_loss_pw)
-        kl_div_pw_neg = torch.multiply(mask_negatives, kl_loss_pw)
+        kl_loss = self.kl_dist(rep_anchors_rows + 1e-6, pdist_matrix + 1e-6)
+        kl_loss = kl_loss.reshape(embs.shape[0], embs.shape[0])
+        kl_div_pw_pos = torch.multiply(mask_anchors, kl_loss)
+        kl_div_pw_neg = torch.multiply(mask_negatives, kl_loss)
         kl_loss = kl_div_pw_pos.mean(1, keepdim=True) - kl_div_pw_neg.mean(1, keepdim=True) + torch.tensor(self.margin)
         kl_loss = torch.maximum(kl_loss, torch.zeros_like(kl_loss))
 
@@ -105,24 +101,17 @@ class ConditionalDomainLoss(nn.Module):
         self.num_classes = num_classes
 
     def forward(self, logits_list: List[Tensor], labels: Tensor, domain: Tensor, target_start_id: Optional[int] = None) -> Tuple[Tensor, Tensor]:
-        labels_source = labels[:target_start_id]
-        domain_source = domain[:target_start_id]
-        # adv_domain_source = (1 - domain)[:target_start_id]
-        labels_target = labels[target_start_id :]
-        domain_target = domain[target_start_id :]
-        adv_domain_target = (1 - domain)[target_start_id :]
-
         lossA, lossB  = 0., 0.
         for label in range(self.num_classes):
-            is_class_source = labels_source.argmax(1) == label 
-            masked_domain_source = domain_source[is_class_source]
+            is_class_source = labels[:target_start_id].argmax(1) == label 
+            masked_domain_source = domain[:target_start_id][is_class_source]
             masked_class_dann_source = logits_list[label][:target_start_id][is_class_source]
-            # masked_adv_domain_source = adv_domain_source[is_class_source]
+            # masked_adv_domain_source = (1 - domain)[:target_start_id][is_class_source]
 
-            is_class_target_1 = labels_target.argmax(1) == label 
-            masked_domain_target_1 = domain_target[is_class_target_1]
+            is_class_target_1 = labels[target_start_id :].argmax(1) == label 
+            masked_domain_target_1 = domain[target_start_id :][is_class_target_1]
             masked_class_dann_target_1 = logits_list[label][target_start_id :][is_class_target_1]
-            masked_adv_domain_target_1 = adv_domain_target[is_class_target_1]
+            masked_adv_domain_target_1 = (1 - domain)[target_start_id :][is_class_target_1]
 
             m_shape_ratio = torch.tensor(max(masked_domain_source.shape[0] // (masked_domain_target_1.shape[0]+1e-06), 1))
             masked_domain = torch.cat((masked_domain_source, masked_domain_target_1), dim=0)

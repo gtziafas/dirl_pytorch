@@ -4,6 +4,7 @@ import scipy.io as sio
 import h5py
 import numpy as np
 from math import ceil
+from random import sample 
 from skimage.transform import resize
 import os
 import torch
@@ -32,7 +33,7 @@ def load_dataset(name: str, datasets_directory: str = './resources') -> Tuple[Li
         y_train = torch.eye(n_values)[torch.tensor(y_train)]
         y_test = torch.eye(n_values)[torch.tensor(y_test)]
 
-        return x_train, y_train, x_test, y_test
+        return x_train, list(y_train), x_test, list(y_test)
 
     elif name == "mnistm":
           # ds =  pkl.load(open(os.path.join(datasets_directory, "mnistm_data.pkl"), 'rb'))
@@ -90,7 +91,7 @@ def few_labels(data: List[Tensor], labels: List[Tensor], num_pts: int, num_class
         data_subset.append(data[filterr][0:num_pts])
         labels_subset.append(labels[filterr][0:num_pts])
 
-    return data_subset, labels_subset 
+    return tuple(torch.cat(data_subset, dim=0)), tuple(torch.cat(labels_subset, dim=0)) 
 
 
 def prepare_dataset(source: str, 
@@ -113,3 +114,60 @@ def prepare_dataset(source: str,
     target_dl_test = DataLoader(list(zip(target_data_test, target_labels_test)), shuffle=False, batch_size=sizing[2])
 
     return (source_dl, source_dl_test), (target_dl, target_dl_test, target_data_sup, target_labels_sup)
+
+
+# def batch_generator(data: List[Tensor], batch_size: int, shuffle=True, iter_shuffle=False):
+#     data = [torch.stack(d) for d in data]
+#     num = data[0].shape[0]
+    
+#     def shuffle_aligned_list(data):
+#         p = np.random.permutation(num)
+#         return [d[p] for d in data]
+
+#     if shuffle:
+#         data = shuffle_aligned_list(data)
+
+#     batch_count = 0
+#     while True:
+#         if batch_count * batch_size + batch_size >= num:
+#           batch_count = 0
+#           if iter_shuffle:
+#             print("batch shuffling")
+#             data = shuffle_aligned_list(data)
+
+#     start = batch_count * batch_size
+#     end = start + batch_size
+#     batch_count += 1
+#     yield [d[start:end] for d in data]
+
+
+class BatchGenerator(object):
+    Sample = List[Tuple[Tensor, Tensor]]
+
+    def __init__(self, 
+                 dataset: List[Tuple[Tensor, Tensor]],
+                 batch_size: int, 
+                 shuffle: bool=True, 
+                 iter_shuffle: bool=False
+                 ):
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.shuffle = shuffle 
+        self.iter_shuffle = iter_shuffle 
+        self.batch_count = 0 
+        self.total_num = len(dataset)
+
+    def _shuffle(self, ds: List[Any]) -> List[Any]:
+        return ds if not self.shuffle else sample(ds, len(ds))
+
+    def __next__(self) -> Sample:
+        if (self.batch_count + 1) * self.batch_size > self.total_num:
+            self.batch_count = 0
+            if self.iter_shuffle:
+                print("batch shuffling...")
+                self.dataset = sample(self.dataset, self.total_num)
+
+        start = self.batch_size * self.batch_count
+        end = start + self.batch_size
+        self.batch_count += 1
+        return self._shuffle(self.dataset[start:end])
