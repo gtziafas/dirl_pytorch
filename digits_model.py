@@ -7,7 +7,7 @@ from grad_reverse import GradReverse
 
 
 class DigitsDIRLEncoder(nn.Module):
-    def __init__(self, num_features: int=1152, emb_dim: int=256):
+    def __init__(self, num_features: int, emb_dim: int):
         super().__init__()
         self.conv1 = nn.Sequential(nn.Conv2d(in_channels=3, out_channels=32, kernel_size=3, padding=1), 
                             nn.LeakyReLU(), 
@@ -53,14 +53,13 @@ class DigitsDIRL(nn.Module):
                 emb_dim: int=128 
                 ):
         super().__init__()
-        self.l_values = l_values
         self.num_classes = num_classes
 
         # freeze gradients to remove unwanted contributions during adversarial step
         self.freeze_gradient = GradReverse(0)
 
         # CNN encoder
-        self.encoder = DigitsDIRLEncoder(emb_dim=emb_dim)
+        self.encoder = DigitsDIRLEncoder(1152, 256)
 
         # classifier
         self.cls = nn.Sequential(nn.Linear(emb_dim, 100),
