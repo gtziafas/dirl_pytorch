@@ -7,11 +7,8 @@ from grad_reverse import GradReverse
 
 
 class DigitsDIRLEncoder(nn.Module):
-<<<<<<< HEAD
     def __init__(self, emb_dim: int):
-=======
-    def __init__(self, num_features: int, emb_dim: int):
->>>>>>> 4478d89f4fe8f76ca36dad4d793dd8f4162dd2c9
+
         super().__init__()
         self.conv1 = nn.Sequential(nn.Conv2d(in_channels=3, out_channels=32, kernel_size=3, padding=1), 
                             nn.LeakyReLU(), 
