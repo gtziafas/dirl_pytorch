@@ -58,10 +58,7 @@ class DigitsDIRL(nn.Module):
                 input_normalize: bool = True 
                 ):
         super().__init__()
-<<<<<<< HEAD
         self.input_normalize = input_normalize
-=======
->>>>>>> 4478d89f4fe8f76ca36dad4d793dd8f4162dd2c9
         self.num_classes = num_classes
 
         # freeze gradients to remove unwanted contributions during adversarial step
@@ -69,11 +66,8 @@ class DigitsDIRL(nn.Module):
         #self.reverse_gradient = GradReverse()
 
         # CNN encoder
-<<<<<<< HEAD
         self.encoder = DigitsDIRLEncoder(emb_dim)
-=======
-        self.encoder = DigitsDIRLEncoder(1152, 256)
->>>>>>> 4478d89f4fe8f76ca36dad4d793dd8f4162dd2c9
+
 
         # classifier
         self.cls = nn.Sequential(nn.Linear(emb_dim, 100),
