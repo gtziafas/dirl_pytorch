@@ -1,6 +1,7 @@
 # merged from https://github.com/janfreyberg/pytorch-revgrad
 from torch.autograd import Function
 from torch.nn import Module
+from torch import tensor
 
 
 class GradReverseFunction(Function):
@@ -15,7 +16,7 @@ class GradReverseFunction(Function):
         grad_input = None 
         _, alpha_ = ctx.saved_tensors 
         if ctx.needs_input_grad[0]:
-            grad_input = -grad_input * alpha_
+            grad_input = -grad_output * alpha_
         return grad_input, None
 
 

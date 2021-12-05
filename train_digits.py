@@ -6,7 +6,7 @@ import torch
 from torch.utils.data import DataLoader
 from torch.optim import Adam 
 
-from digits_dataset_loader import load_dataset, few_labels, BatchGenerator
+from digits_dataset_loader import load_dataset, few_labels
 from digits_model import DigitsDIRL
 from dirl_losses import *
 
@@ -17,6 +17,38 @@ if torch.cuda.is_available():
     torch.backends.cudnn.benchmark = False
     torch.cuda.manual_seed_all(1312)
 random.seed(SEED)
+
+
+class BatchGenerator(object):
+    Sample = List[Tuple[Tensor, Tensor]]
+
+    def __init__(self, 
+                 dataset: List[Tuple[Tensor, Tensor]],
+                 batch_size: int, 
+                 shuffle: bool=True, 
+                 iter_shuffle: bool=False
+                 ):
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.shuffle = shuffle 
+        self.iter_shuffle = iter_shuffle 
+        self.batch_count = 0 
+        self.total_num = len(dataset)
+
+    def _shuffle(self, ds: List[Any]) -> List[Any]:
+        return ds if not self.shuffle else random.sample(ds, len(ds))
+
+    def __next__(self) -> Sample:
+        if (self.batch_count + 1) * self.batch_size > self.total_num:
+            self.batch_count = 0
+            if self.iter_shuffle:
+                print("batch shuffling...")
+                self.dataset = random.sample(self.dataset, self.total_num)
+
+        start = self.batch_size * self.batch_count
+        end = start + self.batch_size
+        self.batch_count += 1
+        return self._shuffle(self.dataset[start:end])
 
 
 def plot_embedding(X, y, d, title=None, save_fig_path='tmp.png'):
@@ -76,7 +108,7 @@ def main(mode: str,
 
     # batch generation and testing split
     gen_batch_source = BatchGenerator(list(zip(source_data, source_labels)), sizing[0], iter_shuffle=False)
-    gen_batch_target = BatchGenerator(list(zip(target_data, target_labels)), sizing[2], iter_shuffle=False)
+    gen_batch_target = BatchGenerator(list(zip(target_data, target_labels)), sizing[2], iter_shuffle=True)
 
     num_test = min(5000, len(source_data_test), len(target_data_test))
     source_random_indices = list(range(len(source_data_test)))

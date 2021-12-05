@@ -7,11 +7,18 @@ from math import ceil
 from random import sample 
 from skimage.transform import resize
 import os
+import cv2
 import torch
 from torch import Tensor
 from torchvision.datasets import MNIST
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
+
+def reshape_many(imgs: np.array) -> List[np.array]:
+    imgs = list(imgs)
+    def _reshape(img, size_t=28):
+        return cv2.resize(img, (size_t, size_t))
+    return np.array(list(map(_reshape, imgs)))
 
 
 def load_dataset(name: str, datasets_directory: str = './resources') -> Tuple[List[Tensor], ...]:
@@ -46,8 +53,10 @@ def load_dataset(name: str, datasets_directory: str = './resources') -> Tuple[Li
         train_data = sio.loadmat(os.path.join(datasets_directory, 'svhn/train_32x32.mat'))
         test_data = sio.loadmat(os.path.join(datasets_directory, 'svhn/test_32x32.mat'))
         
-        x_train = list(crop(torch.tensor(train_data['X'].transpose(3, 2, 0, 1))))
-        x_test = list(crop(torch.tensor(test_data['X'].transpose(3, 2, 0, 1))))
+        # x_train = torch.tensor(reshape_many(train_data['X'].transpose(3, 0, 1, 2))).view(-1, 3, 28, 28)
+        # x_test = torch.tensor(reshape_many(test_data['X'].transpose(3, 0, 1, 2))).view(-1, 3, 28, 28)
+        x_train = crop(torch.tensor(train_data['X'].transpose(3, 2, 0, 1)))
+        x_test = crop(torch.tensor(test_data['X'].transpose(3, 2, 0, 1)))
         
         #convert to onehot
         y_train = train_data['y'] % 10
@@ -57,7 +66,7 @@ def load_dataset(name: str, datasets_directory: str = './resources') -> Tuple[Li
         y_train = torch.from_numpy(np.eye(n_values)[y_train].squeeze())
         y_test = torch.from_numpy(np.eye(n_values)[y_test].squeeze())
 
-        return x_train, list(y_train), x_test, list(y_test)
+        return list(x_train), list(y_train), list(x_test), list(y_test)
     
     elif name == "usps":
           pad = transforms.Pad(6, fill=0) # from 16x16 to 28x28
@@ -139,35 +148,3 @@ def prepare_dataset(source: str,
 #     end = start + batch_size
 #     batch_count += 1
 #     yield [d[start:end] for d in data]
-
-
-class BatchGenerator(object):
-    Sample = List[Tuple[Tensor, Tensor]]
-
-    def __init__(self, 
-                 dataset: List[Tuple[Tensor, Tensor]],
-                 batch_size: int, 
-                 shuffle: bool=True, 
-                 iter_shuffle: bool=False
-                 ):
-        self.dataset = dataset
-        self.batch_size = batch_size
-        self.shuffle = shuffle 
-        self.iter_shuffle = iter_shuffle 
-        self.batch_count = 0 
-        self.total_num = len(dataset)
-
-    def _shuffle(self, ds: List[Any]) -> List[Any]:
-        return ds if not self.shuffle else sample(ds, len(ds))
-
-    def __next__(self) -> Sample:
-        if (self.batch_count + 1) * self.batch_size > self.total_num:
-            self.batch_count = 0
-            if self.iter_shuffle:
-                print("batch shuffling...")
-                self.dataset = sample(self.dataset, self.total_num)
-
-        start = self.batch_size * self.batch_count
-        end = start + self.batch_size
-        self.batch_count += 1
-        return self._shuffle(self.dataset[start:end])
