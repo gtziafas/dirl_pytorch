@@ -143,7 +143,7 @@ def main(mode: str,
     domain_crit = DomainLoss()
     classify_crit = ClassificationLoss()
     cdann_crit = ConditionalDomainLoss(num_classes)
-    triplet_crit = SoftTripletLoss(margin=_cfg['triplet_KL_weight'], sigmas=[0.01, 0.1, 0.5, 1.1], l2_normalization=True)
+    triplet_crit = SoftTripletLoss(margin=_cfg['triplet_KL_margin'], sigmas=[0.01, 0.1, 0.5, 1.1], l2_normalization=True)
 
     # construct domain annotations so that 50% source and 50% target
     domain_batch = torch.eye(2)[torch.tensor([0] * (batch_size // 2) + [1] * (batch_size // 2))].to(device)
