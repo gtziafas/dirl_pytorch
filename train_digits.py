@@ -251,7 +251,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-mode', type=str, default="dirl", choices=["source_only", "triplet", "dann", "dirl"])
     parser.add_argument('-source', type=str, default='mnist', choices=["mnist", "mnistm", "svhn", "usps"])
-    parser.add_argument('-target', type=str, default='svhn', choices=["mnist", "mnistm", "svhn", "usps"])
+    parser.add_argument('-target', type=str, default='usps', choices=["mnist", "mnistm", "svhn", "usps"])
     parser.add_argument('-examples_per_class', type=int, default=10)
     parser.add_argument('-num_classes', type=int, default=10)
     parser.add_argument('-num_iterations', type=int, default=10000)
