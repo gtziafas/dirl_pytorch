@@ -53,10 +53,10 @@ def load_dataset(name: str, datasets_directory: str = './resources') -> Tuple[Li
         train_data = sio.loadmat(os.path.join(datasets_directory, 'svhn/train_32x32.mat'))
         test_data = sio.loadmat(os.path.join(datasets_directory, 'svhn/test_32x32.mat'))
         
-        # x_train = torch.tensor(reshape_many(train_data['X'].transpose(3, 0, 1, 2))).view(-1, 3, 28, 28)
-        # x_test = torch.tensor(reshape_many(test_data['X'].transpose(3, 0, 1, 2))).view(-1, 3, 28, 28)
-        x_train = crop(torch.tensor(train_data['X'].transpose(3, 2, 0, 1)))
-        x_test = crop(torch.tensor(test_data['X'].transpose(3, 2, 0, 1)))
+        x_train = torch.tensor(reshape_many(train_data['X'].transpose(3, 0, 1, 2))).view(-1, 3, 28, 28)
+        x_test = torch.tensor(reshape_many(test_data['X'].transpose(3, 0, 1, 2))).view(-1, 3, 28, 28)
+        # x_train = crop(torch.tensor(train_data['X'].transpose(3, 2, 0, 1)))
+        # x_test = crop(torch.tensor(test_data['X'].transpose(3, 2, 0, 1)))
         
         #convert to onehot
         y_train = train_data['y'] % 10

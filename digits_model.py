@@ -60,7 +60,7 @@ class DigitsDIRL(nn.Module):
 
         # freeze gradients to remove unwanted contributions during adversarial step
         self.freeze_gradient = GradReverse(0)
-        self.reverse_gradient = GradReverse(-1)
+        #self.reverse_gradient = GradReverse(-1)
 
         # CNN encoder
         self.encoder = DigitsDIRLEncoder(emb_dim)
@@ -120,7 +120,7 @@ class DigitsDIRL(nn.Module):
         #   - In adversarial step (step B), only the encoder is trained by using
         #     flipped domain labels, updating it towards a point that fools the 
         #     discriminators.
-        embs_d = self.freeze_gradient(embs) if freeze_gradient else self.reverse_gradient(embs)
+        embs_d = self.freeze_gradient(embs) if freeze_gradient else embs
 
         # domain predictions 
         domain_preds = self.dd(embs_d)
@@ -129,7 +129,7 @@ class DigitsDIRL(nn.Module):
         #cond_domain_preds = [f(embs_f) for f in self.cdd]
 
         # parallel version 
-        embs_f = self.freeze_gradient(embs) if freeze_gradient else self.reverse_gradient(embs)
+        embs_f = self.freeze_gradient(embs) if freeze_gradient else embs
         cond_domain_preds = self.cdd_1(embs_f).unsqueeze(-1) # B x 100K x 1
         cond_domain_preds = F.leaky_relu(cond_domain_preds)
         cond_domain_preds = self.cdd_2(cond_domain_preds) # B x 50K x 1

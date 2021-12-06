@@ -174,11 +174,12 @@ def main(mode: str,
         y_batch = torch.stack(y_batch_source + y_target_sup + y_batch_target, dim=0).to(device)
 
         model.train()
-        opt_A.zero_grad()
-        opt_B.zero_grad()
+        #opt_A.zero_grad()
+        #opt_B.zero_grad()
 
-        triplet_loss = torch.tensor(-1., device=device)
+        triplet_loss = None
         if iteration > 300:
+            #opt_B.zero_grad()
             embs, domain_preds, class_preds, cdann_preds = model.forward(x_batch)
 
             triplet_loss = triplet_crit(embs[:sup_id], y_batch[:sup_id])
@@ -192,6 +193,9 @@ def main(mode: str,
             opt_B.step()
             opt_B.zero_grad()
 
+            triplet_loss = round(triplet_loss.item(), 4)
+
+        #opt_A.zero_grad()
         embs, domain_preds, class_preds, cdann_preds = model.forward(x_batch, freeze_gradient=True)
 
         classify_loss = classify_crit(class_preds[:sup_id], y_batch[:sup_id])
@@ -205,15 +209,15 @@ def main(mode: str,
         opt_A.step()
         opt_A.zero_grad()
 
-        # compute and update metrics 
-        domain_accu = (domain_batch.argmax(1) == domain_preds.argmax(1)).float().mean(0).item() 
-        interim = (y_batch.argmax(1) == class_preds.argmax(1)).float()
-        cls_source_accu = interim[:sizing[0]].mean(0).item()
-        cls_target_sup_accu = interim[sizing[0] : sup_id].mean(0).item()
-        cls_target_accus.append(interim[sizing[0]:].mean(0).item())
-
         # test
         with torch.no_grad():
+            # compute and update metrics 
+            domain_accu = (domain_batch.argmax(1) == domain_preds.argmax(1)).float().mean(0).item() 
+            interim = (y_batch.argmax(1) == class_preds.argmax(1)).float()
+            cls_source_accu = interim[:sizing[0]].mean(0).item()
+            cls_target_sup_accu = interim[sizing[0] : sup_id].mean(0).item()
+            cls_target_accus.append(interim[sizing[0]:].mean(0).item())
+            
             model.eval()
             _size = combined_test_imgs.shape[0]
             out = model.forward(combined_test_imgs)
@@ -224,11 +228,11 @@ def main(mode: str,
         domain_losses.append(domain_loss.item())
         classify_losses.append(classify_loss.item())
         cdann_losses.append(cdann_loss.item())
-        triplet_losses.append(triplet_loss.item())
-        plot_losses.append([domain_loss.item(), classify_loss.item(), cdann_loss.item(), triplet_loss.item()])
+        triplet_losses.append(triplet_loss)
+        plot_losses.append([domain_loss.item(), classify_loss.item(), cdann_loss.item(), triplet_loss])
         
         if iteration % 100 == 0:
-            epoch_string = "Iteration={}, batch losses: {:.4f} {:.4f} {:.4f} {:.4f} \t batch accuracies: {:.3f} {:.3f} {:.3f} {:.3f}".format(
+            epoch_string = "Iteration={}, batch losses: {:.4f} {:.4f} {:.4f} {} \t batch accuracies: {:.3f} {:.3f} {:.3f} {:.3f}".format(
                 iteration, domain_losses[-1], classify_losses[-1], cdann_losses[-1], triplet_losses[-1], domain_accu, cls_source_accu, 
                 cls_target_sup_accu, cls_target_accus[-1])
             print_strings.append(epoch_string)
