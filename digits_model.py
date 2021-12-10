@@ -45,7 +45,7 @@ class DigitsDIRLEncoder(nn.Module):
         x = self.conv3(x)
         x = F.max_pool2d(x, 2, stride=2)
         x = self.emb(x.flatten(1))
-        return x
+        return F.leaky_relu(x)
 
 
 class DigitsDIRL(nn.Module):
@@ -81,20 +81,20 @@ class DigitsDIRL(nn.Module):
                             nn.Linear(50, 2)).apply(self.init_weights)
 
         # conditional domain discriminator
-        # self.cdd = nn.ModuleList([nn.Sequential(nn.Linear(128, 100),
-        #                     nn.LeakyReLU(),
-        #                     nn.Linear(100, 50),
-        #                     nn.LeakyReLU(),
-        #                     nn.Linear(50, 2)) for _ in range(num_classes)]).apply(self.init_weights)
+        self.cdd = nn.ModuleList([nn.Sequential(nn.Linear(emb_dim, 100),
+                            nn.LeakyReLU(),
+                            nn.Linear(100, 50),
+                            nn.LeakyReLU(),
+                            nn.Linear(50, 2)) for _ in range(num_classes)]).apply(self.init_weights)
 
         # parallel version
-        self.cdd_1 = nn.Linear(emb_dim, 100 * num_classes).apply(self.init_weights)
-        self.cdd_2 = nn.Conv1d(100 * num_classes, 50 * num_classes, kernel_size=1, groups=num_classes).apply(self.init_weights)
-        self.cdd_3 = nn.Conv1d(50 * num_classes, 2 * num_classes, kernel_size=1, groups=num_classes).apply(self.init_weights)
+        # self.cdd_1 = nn.Linear(emb_dim, 100 * num_classes).apply(self.init_weights)
+        # self.cdd_2 = nn.Conv1d(100 * num_classes, 50 * num_classes, kernel_size=1, groups=num_classes).apply(self.init_weights)
+        # self.cdd_3 = nn.Conv1d(50 * num_classes, 2 * num_classes, kernel_size=1, groups=num_classes).apply(self.init_weights)
 
     def init_weights(self, m: nn.Module):
         if isinstance(m, nn.Linear) or isinstance(m, nn.Conv1d):
-            torch.nn.init.xavier_uniform_(m.weight)
+            torch.nn.init.kaiming_uniform_(m.weight)
             m.bias.data.fill_(0.01)
 
     def encode(self, x: Tensor) -> Tensor:
@@ -126,16 +126,17 @@ class DigitsDIRL(nn.Module):
         domain_preds = self.dd(embs_d)
 
         # class-conditioned domain predictions - flip aswell
-        #cond_domain_preds = [f(embs_f) for f in self.cdd]
+        embs_f = self.freeze_gradient(embs) if freeze_gradient else embs
+        cond_domain_preds = [f(embs_f) for f in self.cdd]
 
         # parallel version 
-        embs_f = self.freeze_gradient(embs) if freeze_gradient else embs
-        cond_domain_preds = self.cdd_1(embs_f).unsqueeze(-1) # B x 100K x 1
-        cond_domain_preds = F.leaky_relu(cond_domain_preds)
-        cond_domain_preds = self.cdd_2(cond_domain_preds) # B x 50K x 1
-        cond_domain_preds = F.leaky_relu(cond_domain_preds)
-        cond_domain_preds = self.cdd_3(cond_domain_preds) # B x 2K x 1
-        cond_domain_preds = list(cond_domain_preds.squeeze().view(self.num_classes, -1, 2)) # [K x] B x 2    
+        # embs_f = self.freeze_gradient(embs) if freeze_gradient else embs
+        # cond_domain_preds = self.cdd_1(embs_f).unsqueeze(-1) # B x 100K x 1
+        # cond_domain_preds = F.leaky_relu(cond_domain_preds)
+        # cond_domain_preds = self.cdd_2(cond_domain_preds) # B x 50K x 1
+        # cond_domain_preds = F.leaky_relu(cond_domain_preds)
+        # cond_domain_preds = self.cdd_3(cond_domain_preds) # B x 2K x 1
+        # cond_domain_preds = list(cond_domain_preds.squeeze().view(self.num_classes, -1, 2)) # [K x] B x 2    
 
         return embs, domain_preds, class_preds, cond_domain_preds
 

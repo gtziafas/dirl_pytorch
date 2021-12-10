@@ -29,65 +29,42 @@ class DomainLoss(nn.Module):
 
         # adversarial loss for the target data
         logits_target = logits[target_start_id:]
-        adv_domain_labels_target = (1 - domain)[target_start_id:]
-        adv_domain_loss = F.binary_cross_entropy_with_logits(logits_target, adv_domain_labels_target)
+        adv_domain_target = torch.logical_not(domain)[target_start_id:].float()
+        adv_domain_loss = F.binary_cross_entropy_with_logits(logits_target, adv_domain_target)
 
         return domain_loss, adv_domain_loss
 
 
 class SoftTripletLoss(nn.Module):
-    # soft triplet loss adapted from https://github.com/ajaytanwani/DIRL/blob/master/src/dirl_core/triplet_loss_distribution.py
     def __init__(self, margin: float, sigmas: List[float], l2_normalization: bool):
         super().__init__()
         self.margin = margin 
         self.sigmas = sigmas 
         self.l2_normalization = l2_normalization
-
-    def compute_pairwise_distances(self, x: Tensor, y: Tensor) -> Tensor:
-        """Computes the squared pairwise Euclidean distances between x and y.
-        Args:
-            x: a tensor of shape [num_x_samples, num_features]
-            y: a tensor of shape [num_y_samples, num_features]
-        Returns:
-            a distance matrix of dimensions [num_x_samples, num_y_samples].
-        Raises:
-            ValueError: if the inputs do no matched the specified dimensions.
-        """
-        if not len(x.shape) == len(y.shape) == 2:
-            raise ValueError('Both inputs should be matrices.')
-
-        if x.shape[-1] != y.shape[-1]:
-            raise ValueError('The number of features should be the same.')
-
-        norm = lambda x: torch.square(x).sum(1)
-        return norm(x.unsqueeze(2) - y.T).T
-
-    def kl_dist(self, x: Tensor, y: Tensor) -> Tensor:
-        x = torch.distributions.Categorical(probs=x)
-        y = torch.distributions.Categorical(probs=y)
-        return torch.distributions.kl_divergence(x, y)
+        self.pdist_norm = lambda x: torch.square(x).sum(1)
 
     def forward(self, embs: Tensor, labels: Tensor) -> Tensor:
+        num_anchors = embs.shape[0]
         labels = labels.argmax(-1)
         if self.l2_normalization:
             embs = F.normalize(embs, p=2, dim=1)
 
-        pdist_matrix = self.compute_pairwise_distances(embs, embs)
+        pdist_matrix = self.pdist_norm(embs.unsqueeze(2) - embs.T).T
         beta = 1. / (2. * torch.tensor(self.sigmas, device=embs.device).unsqueeze(1))
-        pdist_matrix = torch.matmul(-beta, pdist_matrix.reshape(1, -1))
-        pdist_matrix = pdist_matrix.exp().sum(0).reshape(embs.shape[0], embs.shape[0])
+        pdist_matrix = torch.matmul(-beta, pdist_matrix.flatten().unsqueeze(0))
+        pdist_matrix = pdist_matrix.exp().sum(0).view(num_anchors, num_anchors)
+        pdist_matrix /= pdist_matrix.sum(1).unsqueeze(1)
 
-        mask_anchors = labels.unsqueeze(0) == labels.unsqueeze(1).float()
-        mask_negatives = torch.logical_not(mask_anchors).float()
+        mask_positives = (labels.unsqueeze(0) == labels.unsqueeze(1)).float()
+        mask_negatives = torch.logical_not(mask_positives).float()
+        
+        anchors_rep = torch.tile(pdist_matrix, [1, num_anchors])
+        anchors_rep = anchors_rep.reshape(num_anchors * num_anchors, num_anchors)
+        anchors_rep_t = torch.tile(pdist_matrix, [num_anchors, 1])
 
-        pdist_matrix = pdist_matrix / torch.norm(pdist_matrix, p=1, dim=1, keepdim=True)
-        rep_anchors_rows = torch.tile(pdist_matrix, [1, pdist_matrix.shape[0]])
-        rep_anchors_rows = rep_anchors_rows.reshape(pdist_matrix.shape[0] * pdist_matrix.shape[1], pdist_matrix.shape[0])
-        pdist_matrix = torch.tile(pdist_matrix, [pdist_matrix.shape[0], 1])
-
-        kl_loss = self.kl_dist(rep_anchors_rows + 1e-6, pdist_matrix + 1e-6)
-        kl_loss = kl_loss.reshape(embs.shape[0], embs.shape[0])
-        kl_div_pw_pos = torch.multiply(mask_anchors, kl_loss)
+        kl_loss = (anchors_rep * (anchors_rep.log() - anchors_rep_t.log())).sum(1)
+        kl_loss = kl_loss.view(num_anchors, num_anchors)
+        kl_div_pw_pos = torch.multiply(mask_positives, kl_loss)
         kl_div_pw_neg = torch.multiply(mask_negatives, kl_loss)
         kl_loss = kl_div_pw_pos.mean(1, keepdim=True) - kl_div_pw_neg.mean(1, keepdim=True) + torch.tensor(self.margin)
         kl_loss = torch.maximum(kl_loss, torch.zeros_like(kl_loss))
@@ -100,26 +77,31 @@ class ConditionalDomainLoss(nn.Module):
         super().__init__()
         self.num_classes = num_classes
 
-    def forward(self, logits_list: List[Tensor], labels: Tensor, domain: Tensor, target_start_id: Optional[int] = None) -> Tuple[Tensor, Tensor]:
+    def forward(self, logits_list: List[Tensor], labels: Tensor, domain: Tensor, target_start_id: int) -> Tuple[Tensor, Tensor]:
+        batch_size = labels.shape[0]
+        sizing = [target_start_id, batch_size - target_start_id]
+        labels_source, labels_target = torch.split(labels, sizing)
+        domain_source, domain_target = torch.split(domain, sizing)
+        logits_list_source, logits_list_target = zip(*[torch.split(l, sizing) for l in logits_list])
+
         lossA, lossB  = 0., 0.
-        for label in range(self.num_classes):
-            is_class_source = labels[:target_start_id].argmax(1) == label 
-            masked_domain_source = domain[:target_start_id][is_class_source]
-            masked_class_dann_source = logits_list[label][:target_start_id][is_class_source]
-            # masked_adv_domain_source = (1 - domain)[:target_start_id][is_class_source]
+        for class_id in range(self.num_classes):
+            is_class_source = (labels_source.argmax(1) == class_id).unsqueeze(1) 
+            masked_domain_source = torch.masked_select(domain_source, is_class_source).view(-1, 2)
+            masked_class_dann_source = torch.masked_select(logits_list_source[class_id], is_class_source).view(-1, 2)
 
-            is_class_target_1 = labels[target_start_id :].argmax(1) == label 
-            masked_domain_target_1 = domain[target_start_id :][is_class_target_1]
-            masked_class_dann_target_1 = logits_list[label][target_start_id :][is_class_target_1]
-            masked_adv_domain_target_1 = (1 - domain)[target_start_id :][is_class_target_1]
-
-            m_shape_ratio = torch.tensor(max(masked_domain_source.shape[0] // (masked_domain_target_1.shape[0]+1e-06), 1))
-            masked_domain = torch.cat((masked_domain_source, masked_domain_target_1), dim=0)
-            masked_class_dann = torch.cat((masked_class_dann_source, masked_class_dann_target_1), dim=0)
-            # masked_adv_domain = torch.cat((masked_adv_domain_source, masked_adv_domain_target_1), dim=0)
-
+            is_class_target = (labels_target.argmax(1) == class_id).unsqueeze(1) 
+            masked_domain_target = torch.masked_select(domain_target, is_class_target).view(-1, 2)
+            masked_class_dann_target = torch.masked_select(logits_list_target[class_id], is_class_target).view(-1, 2)
+            masked_adv_domain_target = torch.masked_select(torch.logical_not(domain_target).float(), is_class_target).view(-1, 2)
+            
+            masked_domain = torch.cat((masked_domain_source, masked_domain_target), dim=0)
+            masked_class_dann = torch.cat((masked_class_dann_source, masked_class_dann_target), dim=0)
+            
             lossA += F.binary_cross_entropy_with_logits(masked_class_dann, masked_domain)
-            lossB += F.binary_cross_entropy_with_logits(masked_class_dann_target_1, masked_adv_domain_target_1)        
+            lossB += F.binary_cross_entropy_with_logits(masked_class_dann_target, masked_adv_domain_target)        
+        
         lossA /= self.num_classes
         lossB /= self.num_classes
+        
         return lossA, lossB

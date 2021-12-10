@@ -16,39 +16,77 @@ if torch.cuda.is_available():
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     torch.cuda.manual_seed_all(1312)
-random.seed(SEED)
+np.random.seed(1312)
+random.seed(1312)
 
 
-class BatchGenerator(object):
-    Sample = List[Tuple[Tensor, Tensor]]
+@torch.no_grad()
+def batch_generator(data: List[Tensor], 
+                    batch_size: int, 
+                    shuffle: int=True, 
+                    iter_shuffle: int=False,
+                    ):
+    """Generate batches of data.
 
-    def __init__(self, 
-                 dataset: List[Tuple[Tensor, Tensor]],
-                 batch_size: int, 
-                 shuffle: bool=True, 
-                 iter_shuffle: bool=False
-                 ):
-        self.dataset = dataset
-        self.batch_size = batch_size
-        self.shuffle = shuffle 
-        self.iter_shuffle = iter_shuffle 
-        self.batch_count = 0 
-        self.total_num = len(dataset)
+    Given a list of array-like objects, generate batches of a given
+    size by yielding a list of array-like objects corresponding to the
+    same slice of each input.
+    """
+    num = data[0].shape[0]
+    
+    def shuffle_aligned_list(data: List[Tensor]):
+      """Shuffle arrays in a list by shuffling each array identically."""
+      p = np.random.permutation(num)
+      return [d[p] for d in data]
 
-    def _shuffle(self, ds: List[Any]) -> List[Any]:
-        return ds if not self.shuffle else random.sample(ds, len(ds))
+    #num = data[0].shape[0]
+    if shuffle:
+        data = shuffle_aligned_list(data)
 
-    def __next__(self) -> Sample:
-        if (self.batch_count + 1) * self.batch_size > self.total_num:
-            self.batch_count = 0
-            if self.iter_shuffle:
-                print("batch shuffling...")
-                self.dataset = random.sample(self.dataset, self.total_num)
+    batch_count = 0
+    while True:
+        if batch_count * batch_size + batch_size >= num:
+          batch_count = 0
+          if iter_shuffle:
+            print("batch shuffling")
+            data = shuffle_aligned_list(data)
 
-        start = self.batch_size * self.batch_count
-        end = start + self.batch_size
-        self.batch_count += 1
-        return self._shuffle(self.dataset[start:end])
+        start = batch_count * batch_size
+        end = start + batch_size
+        batch_count += 1
+        yield [d[start:end] for d in data]    
+
+
+# class _BatchGenerator(object):
+#     Sample = List[Tuple[Tensor, Tensor]]
+
+#     def __init__(self, 
+#                  dataset: List[Tuple[Tensor, Tensor]],
+#                  batch_size: int, 
+#                  shuffle: bool=True, 
+#                  iter_shuffle: bool=False
+#                  ):
+#         self.dataset = dataset
+#         self.batch_size = batch_size
+#         self.shuffle = shuffle 
+#         self.iter_shuffle = iter_shuffle 
+#         self.batch_count = 0 
+#         self.total_num = len(dataset)
+
+#     def _shuffle(self, ds: List[Any]) -> List[Any]:
+#         return ds if not self.shuffle else random.sample(ds, len(ds))
+
+#     def __next__(self) -> Sample:
+#         if (self.batch_count + 1) * self.batch_size > self.total_num:
+#             self.batch_count = 0
+#             if self.iter_shuffle:
+#                 print("batch shuffling...")
+#                 self.dataset = random.sample(self.dataset, self.total_num)
+
+#         start = self.batch_size * self.batch_count
+#         end = start + self.batch_size
+#         self.batch_count += 1
+#         return torch.stack(self._shuffle(self.dataset[start:end]))
 
 
 def plot_embedding(X, y, d, title=None, save_fig_path='tmp.png'):
@@ -91,24 +129,23 @@ def main(mode: str,
         os.mkdir(logdir)
 
     # load and partition data
-    source_data, source_labels, source_data_test, source_labels_test = load_dataset(source)
-    target_data, target_labels, target_data_test, target_labels_test = load_dataset(target)
+    source_data, source_data_test, source_labels, source_labels_test = load_dataset(source)
+    target_data, target_data_test, target_labels, target_labels_test = load_dataset(target)
 
     target_sup_size = examples_per_class * num_classes
-    sizing = [int(target_sup_size * 3.25), target_sup_size, int(target_sup_size * 2.25)]
+    sizing = [int(target_sup_size * 4), target_sup_size, int(target_sup_size * 3)]
     sup_id = sum(sizing[0:2])
     batch_size = sum(sizing)
 
     x_target_sup, y_target_sup = few_labels(target_data, target_labels, examples_per_class, num_classes)
 
-    # source_dl = DataLoader(list(zip(source_data, source_labels)), shuffle=True, batch_size=sizing[0])
-    # target_dl = DataLoader(list(zip(target_data, target_labels)), shuffle=True, batch_size=sizing[2])
-    # source_dl_test = DataLoader(list(zip(source_data_test, source_labels_test)), shuffle=False, batch_size=sizing[0])
-    # target_dl_test = DataLoader(list(zip(target_data_test, target_labels_test)), shuffle=False, batch_size=sizing[2])
-
     # batch generation and testing split
-    gen_batch_source = BatchGenerator(list(zip(source_data, source_labels)), sizing[0], iter_shuffle=False)
-    gen_batch_target = BatchGenerator(list(zip(target_data, target_labels)), sizing[2], iter_shuffle=True)
+    dl_source = DataLoader(list(zip(source_data, source_labels)), batch_size=sizing[0], shuffle=True, drop_last=True)
+    dl_target = DataLoader(list(zip(target_data, target_labels)), batch_size=sizing[2], shuffle=True, drop_last=True)
+    # gen_batch_source = BatchGenerator(list(zip(source_data, source_labels)), sizing[0], iter_shuffle=False)
+    # gen_batch_target = BatchGenerator(list(zip(target_data, target_labels)), sizing[2], iter_shuffle=True)
+    # gen_batch_source = batch_generator([source_data, source_labels], sizing[0], iter_shuffle=False)
+    # gen_batch_target = batch_generator([target_data, target_labels], sizing[2], iter_shuffle=True)
 
     num_test = min(5000, len(source_data_test), len(target_data_test))
     source_random_indices = list(range(len(source_data_test)))
@@ -118,17 +155,13 @@ def main(mode: str,
     source_test_indices = torch.tensor(source_random_indices[:num_test])
     target_test_indices = torch.tensor(target_random_indices[:num_test])
 
-    source_data_test = torch.stack(source_data_test)
-    target_data_test = torch.stack(target_data_test)
-    source_labels_test = torch.stack(source_labels_test)
-    target_labels_test = torch.stack(target_labels_test)
     combined_test_imgs = torch.vstack([source_data_test[source_test_indices], target_data_test[target_test_indices]]).to(device)
     combined_test_labels = torch.vstack([source_labels_test[source_test_indices], target_labels_test[target_test_indices]]).to(device)
     combined_test_domain = torch.vstack([torch.tile(torch.tensor([1, 0.]), [num_test, 1]),
                                       torch.tile(torch.tensor([0, 1.]), [num_test, 1])]).to(device)
 
     # load model
-    model = DigitsDIRL().to(device)
+    model = DigitsDIRL(emb_dim=256).to(device)
 
     # define criteria and optimizers
     _cfg = {
@@ -149,8 +182,13 @@ def main(mode: str,
     domain_batch = torch.eye(2)[torch.tensor([0] * (batch_size // 2) + [1] * (batch_size // 2))].to(device)
 
     # define optimizer steps
-    opt_A = Adam(model.parameters(), lr=1e-03)
-    opt_B = Adam(model.encoder.parameters(), lr=1e-03)
+    opt_A =  Adam([ 
+                 {'params': model.encoder.parameters(), 'weight_decay': 1e-4}, 
+                 {'params': model.cls.parameters()}, 
+                 {'params': model.dd.parameters()}, 
+                 {'params': model.cdd.parameters()},
+             ], lr=1e-3)  
+    opt_B = Adam(model.encoder.parameters(), lr=1e-03, weight_decay=1e-04)
 
     # training loop
     safety = 0
@@ -168,18 +206,20 @@ def main(mode: str,
     print('Training...')
     for iteration in range(num_iterations):
         # concat data in batch
-        x_batch_source, y_batch_source = zip(*next(gen_batch_source))
-        x_batch_target, y_batch_target = zip(*next(gen_batch_target))
-        x_batch = torch.stack(x_batch_source + x_target_sup + x_batch_target, dim=0).to(device)
-        y_batch = torch.stack(y_batch_source + y_target_sup + y_batch_target, dim=0).to(device)
+        # x_batch_source, y_batch_source = next(gen_batch_source)
+        # x_batch_target, y_batch_target = next(gen_batch_target)
+        x_batch_source, y_batch_source = next(dl_source.__iter__())
+        x_batch_target, y_batch_target = next(dl_target.__iter__())
+        x_batch = torch.cat((x_batch_source, x_target_sup, x_batch_target), dim=0).to(device)
+        y_batch = torch.cat((y_batch_source, y_target_sup, y_batch_target), dim=0).to(device)
 
         model.train()
-        #opt_A.zero_grad()
-        #opt_B.zero_grad()
+        # opt_A.zero_grad()
+        # opt_B.zero_grad()
 
         triplet_loss = None
         if iteration > 300:
-            #opt_B.zero_grad()
+            opt_B.zero_grad()
             embs, domain_preds, class_preds, cdann_preds = model.forward(x_batch)
 
             triplet_loss = triplet_crit(embs[:sup_id], y_batch[:sup_id])
@@ -187,15 +227,16 @@ def main(mode: str,
             _, cdann_loss_adv = cdann_crit([t[:sup_id] for t in cdann_preds], y_batch[:sup_id], domain_batch[:sup_id], target_start_id=sizing[0])
             
             loss_B = _cfg['class_dann_weight'] * cdann_loss_adv + _cfg['domain_weight'] * adv_domain_loss + triplet_loss
+            #loss_B = _cfg['domain_weight'] * adv_domain_loss
 
             # backprop adversarial step
             loss_B.backward()
             opt_B.step()
-            opt_B.zero_grad()
+            #opt_B.zero_grad()
 
             triplet_loss = round(triplet_loss.item(), 4)
 
-        #opt_A.zero_grad()
+        opt_A.zero_grad()
         embs, domain_preds, class_preds, cdann_preds = model.forward(x_batch, freeze_gradient=True)
 
         classify_loss = classify_crit(class_preds[:sup_id], y_batch[:sup_id])
@@ -203,11 +244,12 @@ def main(mode: str,
         cdann_loss, _ = cdann_crit([t[:sup_id] for t in cdann_preds], y_batch[:sup_id], domain_batch[:sup_id], target_start_id=sizing[0])
 
         loss_A = _cfg['classify_weight'] * classify_loss + _cfg['class_dann_weight'] * cdann_loss + _cfg['domain_weight'] * domain_loss
+        #loss_A = _cfg['classify_weight'] * classify_loss + _cfg['domain_weight'] * domain_loss
 
         # backprop classification step        
         loss_A.backward()
         opt_A.step()
-        opt_A.zero_grad()
+        #opt_A.zero_grad()
 
         # test
         with torch.no_grad():
@@ -228,6 +270,7 @@ def main(mode: str,
         domain_losses.append(domain_loss.item())
         classify_losses.append(classify_loss.item())
         cdann_losses.append(cdann_loss.item())
+        #cdann_losses.append(None)
         triplet_losses.append(triplet_loss)
         plot_losses.append([domain_loss.item(), classify_loss.item(), cdann_loss.item(), triplet_loss])
         
@@ -251,7 +294,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-mode', type=str, default="dirl", choices=["source_only", "triplet", "dann", "dirl"])
     parser.add_argument('-source', type=str, default='mnist', choices=["mnist", "mnistm", "svhn", "usps"])
-    parser.add_argument('-target', type=str, default='usps', choices=["mnist", "mnistm", "svhn", "usps"])
+    parser.add_argument('-target', type=str, default='mnistm', choices=["mnist", "mnistm", "svhn", "usps"])
     parser.add_argument('-examples_per_class', type=int, default=10)
     parser.add_argument('-num_classes', type=int, default=10)
     parser.add_argument('-num_iterations', type=int, default=10000)
