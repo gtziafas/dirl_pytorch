@@ -14,3 +14,7 @@ pip install -r requirements.txt
 
 # Run experiments
 Simply run ``train_digits.py`` to run the MNIST->USPS experiment, or use the -h flag to see other available options
+
+# TODO
+- Replicate visualizations of results like original repo
+- SVHN experiment does not replicate paper results. 
