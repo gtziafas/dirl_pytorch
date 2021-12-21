@@ -1,10 +1,16 @@
 from typing import *
 import os
+import yaml
 import random
 import numpy as np  
 import torch
 from torch.utils.data import DataLoader
 from torch.optim import Adam 
+from sklearn.neighbors import KDTree
+import matplotlib
+matplotlib.use('TkAgg')  # Need Tk for interactive plots.
+import matplotlib.pyplot as plt
+from sklearn.manifold import TSNE
 
 from digits_dataset_loader import load_dataset, few_labels
 from digits_model import DigitsDIRL
@@ -18,75 +24,6 @@ if torch.cuda.is_available():
     torch.cuda.manual_seed_all(1312)
 np.random.seed(1312)
 random.seed(1312)
-
-
-@torch.no_grad()
-def batch_generator(data: List[Tensor], 
-                    batch_size: int, 
-                    shuffle: int=True, 
-                    iter_shuffle: int=False,
-                    ):
-    """Generate batches of data.
-
-    Given a list of array-like objects, generate batches of a given
-    size by yielding a list of array-like objects corresponding to the
-    same slice of each input.
-    """
-    num = data[0].shape[0]
-    
-    def shuffle_aligned_list(data: List[Tensor]):
-      """Shuffle arrays in a list by shuffling each array identically."""
-      p = np.random.permutation(num)
-      return [d[p] for d in data]
-
-    #num = data[0].shape[0]
-    if shuffle:
-        data = shuffle_aligned_list(data)
-
-    batch_count = 0
-    while True:
-        if batch_count * batch_size + batch_size >= num:
-          batch_count = 0
-          if iter_shuffle:
-            print("batch shuffling")
-            data = shuffle_aligned_list(data)
-
-        start = batch_count * batch_size
-        end = start + batch_size
-        batch_count += 1
-        yield [d[start:end] for d in data]    
-
-
-# class _BatchGenerator(object):
-#     Sample = List[Tuple[Tensor, Tensor]]
-
-#     def __init__(self, 
-#                  dataset: List[Tuple[Tensor, Tensor]],
-#                  batch_size: int, 
-#                  shuffle: bool=True, 
-#                  iter_shuffle: bool=False
-#                  ):
-#         self.dataset = dataset
-#         self.batch_size = batch_size
-#         self.shuffle = shuffle 
-#         self.iter_shuffle = iter_shuffle 
-#         self.batch_count = 0 
-#         self.total_num = len(dataset)
-
-#     def _shuffle(self, ds: List[Any]) -> List[Any]:
-#         return ds if not self.shuffle else random.sample(ds, len(ds))
-
-#     def __next__(self) -> Sample:
-#         if (self.batch_count + 1) * self.batch_size > self.total_num:
-#             self.batch_count = 0
-#             if self.iter_shuffle:
-#                 print("batch shuffling...")
-#                 self.dataset = random.sample(self.dataset, self.total_num)
-
-#         start = self.batch_size * self.batch_count
-#         end = start + self.batch_size
-#         self.batch_count += 1
-#         return torch.stack(self._shuffle(self.dataset[start:end]))
 
 
 def plot_embedding(X, y, d, title=None, save_fig_path='tmp.png'):
@@ -113,16 +50,28 @@ def plot_embedding(X, y, d, title=None, save_fig_path='tmp.png'):
     plt.savefig(save_fig_path, format='png', bbox_inches='tight', pad_inches=2)
 
 
+def test(model: nn.Module, test_data: List[Tensor]) -> Tuple[float, float]:
+    combined_test_imgs, combined_test_labels = test_data
+    model.eval()
+    _size = combined_test_imgs.shape[0]
+    out = model.forward(combined_test_imgs)
+    interim = (combined_test_labels.argmax(1) == out[2].argmax(1)).float()
+    source_accuracy_fin = interim[:_size // 2].mean(0)
+    target_accuracy_fin = interim[_size // 2:].mean(0)
+    return source_accuracy_fin, target_accuracy_fin
+
+
 def main(mode: str, 
          source: str, 
          target: str, 
          examples_per_class: int,
-         num_iterations: int,
-         #config_path: str,
+         config_path: str,
          save_results: bool,
-         num_classes: int,
          device: str
         ):
+    with open(config_path, 'r') as stream:
+        cfg = yaml.safe_load(stream)
+
     # create directory to save results
     logdir = os.path.join(os.getcwd(), 'results')
     if not os.path.exists(logdir):
@@ -132,8 +81,9 @@ def main(mode: str,
     source_data, source_data_test, source_labels, source_labels_test = load_dataset(source)
     target_data, target_data_test, target_labels, target_labels_test = load_dataset(target)
 
+    num_classes = cfg['dataset']['num_classes']
     target_sup_size = examples_per_class * num_classes
-    sizing = [int(target_sup_size * 4), target_sup_size, int(target_sup_size * 3)]
+    sizing = [target_sup_size * s for s in cfg['dataset']['sizing']]
     sup_id = sum(sizing[0:2])
     batch_size = sum(sizing)
 
@@ -142,12 +92,8 @@ def main(mode: str,
     # batch generation and testing split
     dl_source = DataLoader(list(zip(source_data, source_labels)), batch_size=sizing[0], shuffle=True, drop_last=True)
     dl_target = DataLoader(list(zip(target_data, target_labels)), batch_size=sizing[2], shuffle=True, drop_last=True)
-    # gen_batch_source = BatchGenerator(list(zip(source_data, source_labels)), sizing[0], iter_shuffle=False)
-    # gen_batch_target = BatchGenerator(list(zip(target_data, target_labels)), sizing[2], iter_shuffle=True)
-    # gen_batch_source = batch_generator([source_data, source_labels], sizing[0], iter_shuffle=False)
-    # gen_batch_target = batch_generator([target_data, target_labels], sizing[2], iter_shuffle=True)
 
-    num_test = min(5000, len(source_data_test), len(target_data_test))
+    num_test = min(cfg['model']['test_size'], len(source_data_test), len(target_data_test))
     source_random_indices = list(range(len(source_data_test)))
     target_random_indices = list(range(len(target_data_test)))
     random.shuffle(source_random_indices)
@@ -161,34 +107,29 @@ def main(mode: str,
                                       torch.tile(torch.tensor([0, 1.]), [num_test, 1])]).to(device)
 
     # load model
-    model = DigitsDIRL(emb_dim=256).to(device)
+    model = DigitsDIRL(num_classes=num_classes,
+                       emb_dim=cfg['model']['embedding_size'],
+                       input_normalize=cfg['model']['input_normalize']).to(device)
 
-    # define criteria and optimizers
-    _cfg = {
-        'domain_weight' : 1.0,
-        'classify_weight' : 1.0,
-        'triplet_weight'  : 1.0,
-        'trplet_margin' : 0.7,
-        'triplet_KL_weight' : 1.0,
-        'triplet_KL_margin' : 0.6,
-        'class_dann_weight' : 1.0
-    }
+    # define criteria
     domain_crit = DomainLoss()
     classify_crit = ClassificationLoss()
     cdann_crit = ConditionalDomainLoss(num_classes)
-    triplet_crit = SoftTripletLoss(margin=_cfg['triplet_KL_margin'], sigmas=[0.01, 0.1, 0.5, 1.1], l2_normalization=True)
+    triplet_crit = SoftTripletKLLoss(margin=cfg['loss']['triplet_KL_margin'], 
+                                     sigmas=cfg['loss']['triplet_KL_sigmas'], 
+                                     l2_normalization=cfg['loss']['triplet_KL_l2_normalize'])
 
     # construct domain annotations so that 50% source and 50% target
     domain_batch = torch.eye(2)[torch.tensor([0] * (batch_size // 2) + [1] * (batch_size // 2))].to(device)
 
     # define optimizer steps
     opt_A =  Adam([ 
-                 {'params': model.encoder.parameters(), 'weight_decay': 1e-4}, 
+                 {'params': model.encoder.parameters(), 'weight_decay': cfg['model']['weight_decay']}, 
                  {'params': model.cls.parameters()}, 
                  {'params': model.dd.parameters()}, 
                  {'params': model.cdd.parameters()},
-             ], lr=1e-3)  
-    opt_B = Adam(model.encoder.parameters(), lr=1e-03, weight_decay=1e-04)
+             ], lr=cfg['model']['learning_rate'])  
+    opt_B = Adam(model.encoder.parameters(), lr=cfg['model']['learning_rate'], weight_decay=cfg['model']['weight_decay'])
 
     # training loop
     safety = 0
@@ -204,52 +145,46 @@ def main(mode: str,
     plot_losses = []
     max_test_run = 0
     print('Training...')
-    for iteration in range(num_iterations):
+    for iteration in range(cfg['model']['num_iterations']):
         # concat data in batch
-        # x_batch_source, y_batch_source = next(gen_batch_source)
-        # x_batch_target, y_batch_target = next(gen_batch_target)
         x_batch_source, y_batch_source = next(dl_source.__iter__())
         x_batch_target, y_batch_target = next(dl_target.__iter__())
         x_batch = torch.cat((x_batch_source, x_target_sup, x_batch_target), dim=0).to(device)
         y_batch = torch.cat((y_batch_source, y_target_sup, y_batch_target), dim=0).to(device)
 
         model.train()
-        # opt_A.zero_grad()
-        # opt_B.zero_grad()
 
         triplet_loss = None
         if iteration > 300:
-            opt_B.zero_grad()
+            #opt_B.zero_grad()
             embs, domain_preds, class_preds, cdann_preds = model.forward(x_batch)
 
             triplet_loss = triplet_crit(embs[:sup_id], y_batch[:sup_id])
             _, adv_domain_loss = domain_crit(domain_preds, domain_batch)
             _, cdann_loss_adv = cdann_crit([t[:sup_id] for t in cdann_preds], y_batch[:sup_id], domain_batch[:sup_id], target_start_id=sizing[0])
             
-            loss_B = _cfg['class_dann_weight'] * cdann_loss_adv + _cfg['domain_weight'] * adv_domain_loss + triplet_loss
-            #loss_B = _cfg['domain_weight'] * adv_domain_loss
+            loss_B = cfg['loss']['class_dann_weight'] * cdann_loss_adv + cfg['loss']['domain_weight'] * adv_domain_loss + triplet_loss
 
             # backprop adversarial step
+            opt_B.zero_grad()
             loss_B.backward()
             opt_B.step()
-            #opt_B.zero_grad()
 
             triplet_loss = round(triplet_loss.item(), 4)
 
-        opt_A.zero_grad()
+        #opt_A.zero_grad()
         embs, domain_preds, class_preds, cdann_preds = model.forward(x_batch, freeze_gradient=True)
 
         classify_loss = classify_crit(class_preds[:sup_id], y_batch[:sup_id])
         domain_loss, _ = domain_crit(domain_preds, domain_batch)
         cdann_loss, _ = cdann_crit([t[:sup_id] for t in cdann_preds], y_batch[:sup_id], domain_batch[:sup_id], target_start_id=sizing[0])
 
-        loss_A = _cfg['classify_weight'] * classify_loss + _cfg['class_dann_weight'] * cdann_loss + _cfg['domain_weight'] * domain_loss
-        #loss_A = _cfg['classify_weight'] * classify_loss + _cfg['domain_weight'] * domain_loss
-
-        # backprop classification step        
+        loss_A = cfg['loss']['classify_weight'] * classify_loss + cfg['loss']['class_dann_weight'] * cdann_loss + cfg['loss']['domain_weight'] * domain_loss
+        
+        # backprop classification step
+        opt_A.zero_grad()        
         loss_A.backward()
         opt_A.step()
-        #opt_A.zero_grad()
 
         # test
         with torch.no_grad():
@@ -266,7 +201,7 @@ def main(mode: str,
             interim = (combined_test_labels.argmax(1) == out[2].argmax(1)).float()
             source_accuracy_fin = interim[:_size // 2].mean(0)
             target_accuracy_fin = interim[_size // 2:].mean(0)
-
+            
         domain_losses.append(domain_loss.item())
         classify_losses.append(classify_loss.item())
         cdann_losses.append(cdann_loss.item())
@@ -286,7 +221,91 @@ def main(mode: str,
             print('Source Acc: {:.3f}, \t Target Acc: {:.3f}, \t Max Target Acc: {:.3f}'.format(source_accuracy_fin, target_accuracy_fin, max_test_run))
 
     if save_results:
-        pass
+        # plot loss functions
+        plt.figure(figsize=(10, 5))
+        plt.plot(range(cfg['model']['num_iterations']), plot_losses)
+        plt.legend(['domain_loss', 'classify_loss', 'class_dann_loss', 'triplet_loss'])
+        plt.savefig(os.getcwd() + '/results/dirl_digits_losses_dirl' + '-' + source + '-'+ target + '-' + str(examples_per_class) + '.png', format='png', bbox_inches='tight',
+                    pad_inches=2)
+
+    print("Max Training Accuracy: ", max_test_run)
+    # evaluate accuracy on source and target domains
+    # c1s, c1t = sess.run([source_accuracy_fin, target_accuracy_fin],
+    #                     feed_dict={x: combined_test_imgs, y: combined_test_labels, domain: combined_test_domain})
+    
+    # # domain accuracy
+    # domain_accur_both = sess.run(domain_accuracy, feed_dict={x: combined_test_imgs, domain: combined_test_domain})
+    # domain_accur_source = sess.run(domain_accuracy,
+    #                                feed_dict={x: source_data_test[source_test_indices], domain: np.tile([1, 0.], [num_test, 1])})
+    # domain_accur_target = sess.run(domain_accuracy,
+    #                                feed_dict={x: target_data_test[target_test_indices], domain: np.tile([0, 1.], [num_test, 1])})
+
+    model = model.eval().cpu()
+    with torch.no_grad():
+        _, domain_preds_test, class_preds_test, cdann_preds_test = model.forward(combined_test_imgs.cpu())
+        embs_source, domain_preds_source, class_preds_source, cdann_preds_source = model.forward(source_data_test[source_test_indices])
+        embs_target, domain_preds_target, class_preds_target, cdann_preds_target = model.forward(target_data_test[target_test_indices])
+
+    domain_accur_both = (combined_test_domain.cpu().argmax(1) == domain_preds_test.argmax(1)).float().mean(0).item() 
+    domain_accur_source = (torch.tile(torch.tensor([1., 0.]), [num_test, 1]).argmax(1) == domain_preds_source.argmax(1)).float().mean(0).item() 
+    domain_accur_target = (torch.tile(torch.tensor([0., 1.]), [num_test, 1]).argmax(1) == domain_preds_source.argmax(1)).float().mean(0).item() 
+    print("Domain: both", domain_accur_both, "\nsource:", domain_accur_source, "\ntarget:", domain_accur_target)
+
+    # class accuracy
+    interim = (combined_test_labels.cpu().argmax(1) == class_preds_test.argmax(1)).float()
+    _size = combined_test_imgs.shape[0]
+    class_accur_source = interim[:_size // 2].mean(0).item()
+    class_accur_target = interim[_size // 2:].mean(0).item()
+    # class_accur_source = sess.run(classify_source_accuracy, feed_dict={x: combined_test_imgs, y: combined_test_labels})
+    # class_accur_target = sess.run(classify_target_accuracy, feed_dict={x: combined_test_imgs, y: combined_test_labels})
+
+    print("classification:\nsource:", class_accur_source, "\ntarget:", class_accur_target)
+
+    # KNN accuracy
+    neighbors = cfg['model']['k_neighbours']
+    # source_emb = sess.run(x_features, feed_dict={x: source_data_test[source_test_indices]})
+    # target_emb = sess.run(x_features, feed_dict={x: target_data_test[target_test_indices]})
+    kdt = KDTree(embs_source.cpu().numpy(), leaf_size=30, metric='euclidean')
+    neighbor_idx = kdt.query(embs_target.cpu().numpy(), k=1 + neighbors, return_distance=False)[:, 1:]
+    print(neighbor_idx.shape)
+    neighbor_label = source_labels_test[source_test_indices][neighbor_idx]
+    neighbor_label_summed = neighbor_label.sum(1)
+    knn_accuracy = (target_labels_test[target_test_indices].argmax(1) == neighbor_label_summed.argmax(1)).float().mean().item()
+    print(neighbor_label.shape, neighbor_label_summed.shape)
+    print("Accuracy of knn on labels in z space (source)(on test)", knn_accuracy)
+
+    # plot t-sne embedding
+    num_test = cfg['model']['tsne_test_size']  # tsne
+    num_test = min(num_test, source_data_test.shape[0], target_data_test.shape[0])
+    source_test_indices = source_random_indices[:num_test]
+    target_test_indices = target_random_indices[:num_test]
+    combined_test_imgs = torch.vstack([source_data_test[source_test_indices], target_data_test[target_test_indices]])
+    combined_test_labels = torch.vstack([source_labels_test[source_test_indices], target_labels_test[target_test_indices]])
+    combined_test_domain = torch.vstack([torch.tile(torch.tensor([1, 0.]), [num_test, 1]),
+                                      torch.tile(torch.tensor([0, 1.]), [num_test, 1])])
+
+    with torch.no_grad():
+        dann_emb, _, _, _  = model.forward(combined_test_imgs)
+    # dann_emb = sess.run(x_features, feed_dict={x: combined_test_imgs, domain: combined_test_domain})
+    dann_tsne = TSNE(n_components=2, verbose=0, perplexity=40, n_iter=400).fit_transform(dann_emb.numpy())
+    if save_results:
+        plot_embedding(dann_tsne, combined_test_labels.argmax(1).numpy(), combined_test_domain.numpy().reshape(-1), '', 
+            save_fig_path=os.getcwd() + '/results/dirl_digits_tsne_plot_dirl' + '-' + source + '-' + target + '-' + str(examples_per_class) + '.png')
+    else:
+        plot_embedding(dann_tsne, combined_test_labels.numpy().argmax(1), combined_test_domain.numpy().reshape(-1), '')
+
+    if save_results:
+        # Write the accuracy metrics to the training config file
+        config_output_file = os.getcwd() + '/results/final_training_config_dirl' + '-' + source + '-' + \
+                             target + '-' + str(examples_per_class) + '.yml'
+
+        outfile = open(config_output_file, "a")  # append mode
+
+        outfile.write('\n \n Max Accuracy on target test: \t' + str(max_test_run) + '\n')
+        # outfile.write('Final Accuracy on source, target test: \t' + str(class_accur_source) + ',\t' + str(class_accur_target) + '\n')
+        outfile.write('Domain Accuracy on both, source, target test: \t' + str(domain_accur_both) + ',\t' + str(domain_accur_source) + ',\t' + str(domain_accur_target) + '\n')
+        outfile.write('Classicication Accuracy on source, target test: \t' + str(class_accur_source) + ',\t' + str(class_accur_target) + '\n')
+        outfile.write('KNN accuracy on target test: \t' + str(knn_accuracy) + '\n')
 
 
 if __name__ == "__main__":
@@ -296,11 +315,9 @@ if __name__ == "__main__":
     parser.add_argument('-source', type=str, default='mnist', choices=["mnist", "mnistm", "svhn", "usps"])
     parser.add_argument('-target', type=str, default='mnistm', choices=["mnist", "mnistm", "svhn", "usps"])
     parser.add_argument('-examples_per_class', type=int, default=10)
-    parser.add_argument('-num_classes', type=int, default=10)
-    parser.add_argument('-num_iterations', type=int, default=10000)
-    #parser.add_argument('-config_path', type=str, default='./configs/dirl_digits_config.yml')
+    parser.add_argument('-config_path', type=str, default='./configs/digits_dirl.yml')
     parser.add_argument('-device', type=str, default='cuda')
-    parser.add_argument('-save_results', type=bool, default=False)
+    parser.add_argument('-save_results', type=bool, default=True)
 
     kwargs = vars(parser.parse_args())
     main(**kwargs)

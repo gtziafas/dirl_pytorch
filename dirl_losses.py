@@ -35,7 +35,7 @@ class DomainLoss(nn.Module):
         return domain_loss, adv_domain_loss
 
 
-class SoftTripletLoss(nn.Module):
+class SoftTripletKLLoss(nn.Module):
     def __init__(self, margin: float, sigmas: List[float], l2_normalization: bool):
         super().__init__()
         self.margin = margin 
