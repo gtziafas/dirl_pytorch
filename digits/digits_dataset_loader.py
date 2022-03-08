@@ -20,7 +20,7 @@ def reshape_many(imgs: np.array) -> List[np.array]:
         return cv2.resize(img, (size_t, size_t))
     return np.array(list(map(_reshape, imgs)))
 
-def load_dataset(name: str, datasets_directory: str = './resources') -> Tuple[List[Tensor], ...]:
+def load_dataset(name: str, datasets_directory: str = '../resources') -> Tuple[List[Tensor], ...]:
     file_map = {
         'mnist'  : 'MNIST.pkl',
         'mnistm' : 'MNISTM.pkl',

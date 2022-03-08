@@ -315,7 +315,7 @@ if __name__ == "__main__":
     parser.add_argument('-source', type=str, default='mnist', choices=["mnist", "mnistm", "svhn", "usps"])
     parser.add_argument('-target', type=str, default='mnistm', choices=["mnist", "mnistm", "svhn", "usps"])
     parser.add_argument('-examples_per_class', type=int, default=10)
-    parser.add_argument('-config_path', type=str, default='./configs/digits_dirl.yml')
+    parser.add_argument('-config_path', type=str, default='../configs/digits_dirl.yml')
     parser.add_argument('-device', type=str, default='cuda')
     parser.add_argument('-save_results', type=bool, default=True)
 

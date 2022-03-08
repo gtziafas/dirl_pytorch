@@ -1,0 +1,24 @@
+dataset:
+  input_dim: 28
+  num_classes: 10
+  datasets_directory: '../resources'
+  sizing: [4, 1, 3]
+
+model:
+  embedding_size: 128
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  input_normalize: True
+  test_size: 5000
+  tsne_test_size: 500
+  k_neighbours: 5
+  num_iterations: 10000
+
+loss:
+  domain_weight: 1.0
+  classify_weight: 1.0
+  triplet_KL_weight: 1.0
+  triplet_KL_margin: 0.6
+  triplet_KL_sigmas: [0.01, 0.1, 0.5, 1.1]
+  triplet_KL_l2_normalize: True
+  class_dann_weight: 1.0
